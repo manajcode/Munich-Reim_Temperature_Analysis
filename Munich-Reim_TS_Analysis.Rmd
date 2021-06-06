@@ -1,0 +1,200 @@
+---
+title: 'An Analysis of Munic-Reim Summer Temperature Data'
+author: "Michael Najarro"
+date: "06/06/2020"
+output:
+  pdf_document: default
+---
+
+```{r, message=FALSE}
+library(pacman)
+p_load(astsa, knitr)
+```
+
+## *Introduction*
+
+The summer data set contains mean summer temperatures (Celcius) across 153 days between the years 1781 to 1988 (208 years), measured in the Munich-Riem region of Germany. SInce each point represents one average seasonal temperature I consider no seasonal pattern in this analysis. 
+
+## *Initial Data Investigation*
+```{r upload_data}
+summer <- read.csv(file = "./data/summer.txt", header = FALSE)
+summer <- ts(summer, start = c(1781,1), end = c(1988,1), frequency =1)
+str(summer)
+```
+
+```{r data_investigation, echo = FALSE}
+#assess the tsplot
+par(mfrow = c(2,2))
+tsplot(summer, main = "Summer temperatures", xlab= "Year", ylab = "Temperature")
+
+#assess the spread of the data
+trend <- (summer) - 15  # helps to see differences in temperature.
+tsplot(trend, main = "Spread of summer temperatures", xlab = "Year", ylab= "temperature - mean temp")
+abline(h=0, col = "blue")
+
+smo <- filter(summer, sides = 1, filter = rep(1/4,4))
+
+#plot the MA
+tsplot(summer, main = ("summer temperatures with moving average"), ylab = "temperature")
+lines(smo, col = 'red', lwd = 3)
+```
+
+An initial time series plot of the data yeilds noticable findings. The trend of the data appears to be complex in that multiple, different linear functions could describe different portions of the data; a decrease from 1781 to 1875, an increase between 1875 to 1950, and then a decrease from 1950 to 1988. The data does not appear stationary.
+
+The average temperatures fluctuate between 13 to 18 degrees Celcius. The spread in temperature varies between a -1.5 to 2.5 degree change around 0 Celcius, however the volatility in temperature does not show a growth or reduction in its behavior over time.
+
+Starting from the 25th year (about 1806) and roughly every 40 to 50 years after, unusual warm summers appear.
+
+Applying a moving average to the data to further investigate cyclical patterns enahnaced slightly the 40-50 year cyclical pattern, but bore no new information on cyclical patterns. A noticable cooling period occured between 1850 to 1950. The equation used to smoothen the data is:
+$$v_{t} = \frac{1}{4}(x_{t} +x_{t-1} + x_{t-2} +x_{t-3})$$
+
+\pagebreak
+
+## *Model development*
+
+### Stationarity Dvelopment
+
+In order to develop a model around the temperature data, A look at plots of the auto-covariance functions and partial auto-covariance functions on the raw data show distinct patterns(ACF and PACF graphs not depicted in report).
+
+```{r}
+par(mfrow = c(2,1))
+acf(summer, lag.max = 150)
+pacf(summer, lag.max = 150)
+```
+
+The ACF shows a drop off after the first year. however, there are several significant autocavariances when the lag is at 3, 12, and 13. There may be cyclical patterns. In the ACF, It appears that every 7 years from lag 1 to lag 30 there is some sort of oscilation occuring. This may by analagous to el nino events which occur every 5 to 7 years after a proceeding event, and their duration is roughly a few months up to two years. This pattern appears more noticable in the PACF between lags 10 and 50. 
+
+The PACF shows nearly a white-noise pattern except at lags 1, 6, 12, 46, and 58 being significantly larger than 0. Their appears to be no distinct pattern. Seasonality does not appear to exist in the data. 
+
+Because of the sharp drop in the ACF and the gradual decline in the PACF, a non-seasonal Moving Average model can explain the time series data.
+
+Note that a transformation won't be necessary because the data does not show any trumpetting effects, or growth in volitility. To make the model stationary, differencing the data by 2 past measurements appears to de-trend the data towards a constant mean and a white-noise pattern.
+
+```{r detrending}
+tsplot(diff((summer), differences = 2), main = "differenced temperature data", xlab = "year")
+abline(h=mean(diff((summer), differences = 2)), col=6) 
+```
+
+
+### Model Development
+
+A re-analysis of the ACF and PACF plots of the differenced data identify patterns typical of a Moving Average process.
+
+```{r ACF-PACF_differnced_data}
+q<- (diff((summer), differences = 2))
+par(mfrow = c(1,2))
+acf(q, lag.max  = 150)
+pacf(q, lag.max = 150)
+```
+
+
+I conclude that an ARMA(0,2,3) Model applied to the differenced data most accruately describes the data. The Munich summer temperature can be modelled by an MA(3) process with a diffrence of 2 applied to the data in the following model:
+
+$$x_{t} = (w_{t} -1.7579w_{t-1} + 0.5597w_{t-2} +0.1991w_{t-3})$$
+
+Since this model does not include any Auto regression terms, this is the most reduced form of the model that can exist.
+
+The model will be stationary, as the expecation of $X_{t}$ will be zero due to the incorporation of white-nose terms within the model and the autocovariance will be the product of:
+
+$$(w_{s} -1.7579w_{s-1} + 0.5597w_{s-2} +0.1991w_{s-3})( (w_{t} -1.7579w_{t-1} + 0.5597w_{t-2} +0.1991w_{t-3})$$
+
+which will produce coefficients that are not functions of time at any lag. Support for this model are noted in residuals that approximately follow a normal distribution (see qqplot of residuals), acf and pacf lag values not being significantly different from zero, and lag measurements from the Ljun-Box statistic not being signficantly different from zero for all but one lag. 
+
+```{r}
+h<- sarima((summer),0,2,3)
+h
+```
+
+```{r residual_check}
+par(mfrow = c(1,2))
+acf(resid(h$fit))
+pacf(resid(h$fit))
+```
+
+\pagebreak
+
+### Model Forecasting: Testing the Model
+
+Forecasting the data 20 years into the future, the model simply predicts the average summer temperature (general trend of the data), and no spread of the variation in mean temperatures.The model cannot fully explain the complexity and spread of this data.
+
+```{r}
+j<- sarima.for(summer, plot.all = TRUE, n.ahead=20,0,2,3)
+j
+```
+
+\pagebreak
+
+## **Spectral Analysis**
+
+A spectral analysis can help understand which measurements dominate and explain the patterns within the series.
+
+```{r raw_periodogram}
+verano <- mvspec(diff(summer, differences = 1), col=rgb(.05,.6,.75), lwd=2)
+abline(v=.1715, lty='dotted')
+abline(v=.259, lty='dotted')
+abline(v=.324, lty='dotted')
+abline(v=.375, lty='dotted')
+
+# code below gives values of frequency, period and spectrum.
+#verano$details[37:100, ]
+```
+
+
+A scaled periodogram produces a similar result as the raw periodogram. Surprisingly most peaks are having some, albeit a tiny influence, in the series and are not scaling to 0.
+
+```{r}
+n<- diff(summer)
+P= Mod(fft(n)/sqrt(208))^2 # periodogram
+sP= (1/208)*P #scaled periodogram
+Fr = 1:207/208 # fundmanetal frequencies
+tsplot(Fr, sP, type = "o", xlab = "frequency", ylab = "scaled periodogram", col = 4)
+abline(v=0.5, lty= 5)
+axis(side=1, at=seq(0.1,0.9,by=0.2))
+```
+
+Recall that frequency is the number of events occuring in a given time interval. Thus for each temperature measurement, its frequency would be the number of times a particular summer temperature occured across 208 years. However, since the same temperature measurement can repeat with the data, the frequency is multiplied by the reciprocal of the number of occurances. The periods represent the number of years to pass for a particular measure to be recorded at a later point in time. 
+
+Based on the raw periodogram, we can see that spectral densities rise rapidly after frequencies of 0.2. However the densities are highly volatile. This can be interpretted as the first and second MA process coefficients as eliminating any correlation between temperature measurements, while the last term may be producing a sufficient level of correlation between later terms to produce eratic and volatile noise between measurements.   
+
+The frequencies with the greatest spectral densities, along with their temperatures  are:
+
+```{r}
+# find the largest periods first
+#library(dplyr)
+y <- verano$details
+y[,3]
+```
+
+```{r}
+# find the frequencies with greatest spectral desnities.
+#years obtained by adding 37,67,70,81 to the starting year 1781.
+k<-summer[c(37,67,70,81),]
+yrs<- c(1817,1847,1850,1860)
+kable(cbind(y[c(37,67,70,81), ],k, yrs))
+```
+
+
+
+```{r}
+spec.pgram(n, taper = 0.1, pad = 2)
+```
+
+
+# **Discussion and Conclusion**
+
+The temperature data measured over the past 208 years is highly complex with few to no discenrable patterns. Based on the spectral analyses, we can conclude that the sumemrs with the greatest influence on the time series had frequencies or rates of occurance at 0.3 events per year, with periods somewhere between every 2 to 5 years; lag measures were every 15 years. 
+
+
+I Initially suspected that the warmest temperatured years in the data would have had the largest effect in the data. Surprisingly, the summers with cooler temperatures (troughs within the time series, excluding 1847) had the greatest effect on the behavior of the series, as identified in the periodogram:
+
+```{r}
+tsplot(summer, main = "Summer temperatures", xlab= "Year", ylab = "Temperature")
+abline(v=1817, col = "red")
+abline(v=1847, col='red')
+abline(v=1850, col='red')
+abline(v=1860, col='red')
+```
+
+A variety of sources could have contributed to model complexity. Between the years of 1300 to 1800, Europe was locked in a "little Winter," where global temperatures had decreased for small periods of time. Such intervals could explain the decreasing trend in temperature between 1781 to 1850.
+
+The data lacks multiple measures of centrality per year. Increasing the number of average samples per summer could help to reduce the volatility of the data, reduce the amplitudes in spectral analysis to produce more accurate measures, and contribute to increasing frequency measures. I recommend investigating the raw data to average multiple temperature sub-samples per year and to re-analyze the data.
